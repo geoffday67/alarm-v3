@@ -1,0 +1,67 @@
+#pragma once
+
+#include <stdint.h>
+#include <time.h>
+
+// GDEY029T94-FL03 (SSD1680) e-paper panel showing the time.
+//
+// Not thread-safe: only one task may call showTime() at a time. On a cold
+// boot setup() calls powerOnInit() and its own showTime() before
+// Clock::init() starts the clock task; from then on only the clock task
+// calls it.
+namespace Display {
+
+// Configures the panel's GPIOs and SPI. Call on every boot, including each
+// deep-sleep wake, before powerOnInit() or any showTime(). Releases the pad
+// holds set by prepareForSleep() without glitching the pins. Doesn't talk to
+// the panel.
+void init();
+
+// Call once on a cold boot (power-on, reset, reflash), after init() and
+// before any showTime(). Full panel init and a full refresh to a blank
+// screen, which seeds both RAM planes so partial
+// refreshes work from then on. Must also be repeated if the panel ever loses
+// power. Blocks the caller (~4.3 s), polling BUSY with vTaskDelay().
+void powerOnInit();
+
+// Drives the panel's interface inputs to fixed levels and holds them through
+// the chip's deep sleep (RES# and CS# high, SCK/SDI/D/C low). Otherwise those
+// pins float once the HP domain powers down: a floating RES# can reset the
+// SSD1680 out of its deep sleep, and floating CMOS inputs draw through-current.
+// Call just before esp_deep_sleep_start(), with no update in progress.
+// Returns 0: the display has no wake sources (the return value is the ext1
+// wake mask, as for the other modules' prepareForSleep()).
+uint64_t prepareForSleep();
+
+// Converts utc to local time (using the TZ set in setup()) and renders it
+// as a 12-hour time, "H:MM" or "HH:MM" (no seconds), large on the left
+// with the colon and minutes in a fixed place, "AM"/"PM" to its right on its
+// baseline, and a phone-style battery indicator at the top left showing
+// batteryPercent (0-100; negative for unknown, drawn as an empty outline
+// with no number).
+// Then refreshes the panel and puts the panel into its own deep sleep. Holds
+// a Sleep inhibit for the duration, so the chip can't go into deep sleep
+// mid-update.
+//
+// Always drawn with a fast partial refresh (~0.6 s), which relies on the RAM
+// contents left by powerOnInit() or the previous update; these survive the
+// ESP32's deep sleep because the panel is left in its RAM-retaining deep
+// sleep (see prepareForSleep()). Every EPD_FULL_REFRESH_EVERY-th call
+// (Constants.h) first clears the panel to white with a full, flashing
+// refresh (~4.3 s), to clear ghosting; the count is kept in RTC memory
+// across deep sleep. Blocks the caller until the panel
+// finishes, but polls BUSY with vTaskDelay(), so other tasks keep running.
+void showTime(time_t utc, int batteryPercent);
+
+// Turns the eInk front light on. The PIC turns it off itself after its own
+// on-time, so this returns as soon as the command is sent.
+void showFrontLight();
+
+// Turns the eInk front light on with no time limit, cancelling the PIC's
+// on-time if a showFrontLight() is still running. Stays on, including while
+// this chip deep sleeps, until frontLightOff().
+void holdFrontLightOn();
+
+// Turns the eInk front light off, however it was turned on.
+void frontLightOff();
+}  // namespace Display
